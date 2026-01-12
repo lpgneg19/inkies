@@ -7,27 +7,47 @@ import WebKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @Query(sort: \Item.timestamp, order: .reverse) private var items: [Item]
+
+    private var filteredItems: [Item] {
+        if searchText.isEmpty {
+            return items
+        } else {
+            return items.filter {
+                $0.title.localizedCaseInsensitiveContains(searchText)
+                    || $0.content.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+    }
     @State private var selection: Item?
     @State private var showingRenameAlert = false
     @State private var itemToRename: Item?
     @State private var renameTitle = ""
+    @State private var searchText = ""
+    @State private var isSearchMode = false
+    @FocusState private var isSearchFieldFocused: Bool
 
     // Export States
-    @State private var showingExportInk = false
-    @State private var showingExportJson = false
-    @State private var showingExportWeb = false
+    @State private var showingExport = false
+    @State private var exportType: UTType = .ink
+    @State private var exportDocument: InkExportDocument?
     @State private var showingExportError = false
     @State private var exportErrorMessage = ""
-    @State private var exportDocument: InkDocument?
-    @State private var exportJsonDocument: JSONDocument?
-    @State private var exportWebDocument: WebExportDocument?
     @State private var isExporting = false
+
+    // Story Menu States
+    @State private var showingWordCount = false
+    @State private var showingWatchExpression = false
+    @State private var watchExpression = ""
+    @State private var tagsVisible = true
+    @State private var wordCountStats: (words: Int, characters: Int, lines: Int, knots: Int) = (
+        0, 0, 0, 0
+    )
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                ForEach(items) { item in
+                ForEach(filteredItems) { item in
                     NavigationLink(value: item) {
                         Text(item.title.isEmpty ? L10n.untitled : item.title)
                     }
@@ -52,7 +72,7 @@ struct ContentView: View {
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
             .toolbar {
-                ToolbarItem {
+                ToolbarItem(placement: .navigation) {
                     Button(action: addItem) {
                         Label(L10n.addItem, systemImage: "plus")
                     }
@@ -90,45 +110,179 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
             }
         }
-        // Attached to the SplitView itself
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                HStack(spacing: 8) {
+                    if isSearchMode {
+                        HStack {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundColor(.secondary)
+                            TextField(L10n.search, text: $searchText)
+                                .textFieldStyle(.plain)
+                                .focused($isSearchFieldFocused)
+                                .frame(width: 200)
+
+                            if !searchText.isEmpty {
+                                Button(action: { searchText = "" }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(.unemphasizedSelectedTextBackgroundColor).opacity(0.1))
+                        .cornerRadius(8)
+
+                        Button(L10n.cancel) {
+                            withAnimation {
+                                isSearchMode = false
+                                searchText = ""
+                            }
+                        }
+                    } else {
+                        if selection != nil {
+                            Menu {
+                                Button(L10n.exportInk) { prepareExportInk(selection!) }
+                                Button(L10n.exportJson) {
+                                    Task { await prepareExportJson(selection!) }
+                                }
+                                Button(L10n.exportWeb) {
+                                    Task { await prepareExportWeb(selection!) }
+                                }
+                            } label: {
+                                Label(L10n.exportMenu, systemImage: "square.and.arrow.up")
+                            }
+                        }
+
+                        Button(action: {
+                            withAnimation {
+                                isSearchMode = true
+                                isSearchFieldFocused = true
+                            }
+                        }) {
+                            Label(L10n.search, systemImage: "magnifyingglass")
+                        }
+                    }
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("AddItem"))) { _ in
+            addItem()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("SaveProject"))) {
+            _ in
+            // SwiftData auto-saves, but we can trigger a manual save if needed
+            try? modelContext.save()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("SearchItems"))) {
+            _ in
+            withAnimation {
+                isSearchMode = true
+                isSearchFieldFocused = true
+            }
+        }
+        // Story Menu Handlers
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GotoAnything"))) {
+            _ in
+            // Go to anything - opens search mode (similar to Inky's Cmd+P)
+            withAnimation {
+                isSearchMode = true
+                isSearchFieldFocused = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("NextIssue"))) { _ in
+            // Jump to next issue - In a full implementation, this would navigate to compiler errors
+            // For now, we'll just trigger a refresh
+            if let item = selection {
+                Task { await refreshPreview(for: item) }
+            }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: Notification.Name("AddWatchExpression"))
+        ) { _ in
+            showingWatchExpression = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ToggleTags"))) {
+            _ in
+            tagsVisible.toggle()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowWordCount"))) {
+            _ in
+            if let item = selection {
+                wordCountStats = calculateStats(for: item.content)
+                showingWordCount = true
+            }
+        }
+        // Ink Menu Handler - Insert Snippet
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("InsertSnippet"))) {
+            notification in
+            if let snippet = notification.object as? String, let item = selection {
+                item.content += snippet
+            }
+        }
+        // Unified File Exporter
         .fileExporter(
-            isPresented: $showingExportInk, document: exportDocument, contentType: .ink,
-            defaultFilename: "Story"
+            isPresented: $showingExport,
+            document: exportDocument,
+            contentType: exportType,
+            defaultFilename: {
+                switch exportType {
+                case .ink: return "Story"
+                case .json: return "story"
+                case .html: return "index"
+                default: return "file"
+                }
+            }()
         ) { result in
             handleExportResult(result)
         }
-        .fileExporter(
-            isPresented: $showingExportJson, document: exportJsonDocument, contentType: .json,
-            defaultFilename: "story"
-        ) { result in
-            handleExportResult(result)
-        }
-        .fileExporter(
-            isPresented: $showingExportWeb, document: exportWebDocument, contentType: .html,
-            defaultFilename: "index"
-        ) { result in
-            handleExportResult(result)
-        }
-        .alert("Error", isPresented: $showingExportError) {
+        .alert(L10n.exportFailed, isPresented: $showingExportError) {
             Button("OK") {}
         } message: {
             Text(exportErrorMessage)
+        }
+        // Word Count Dialog
+        .alert(L10n.wordCountTitle, isPresented: $showingWordCount) {
+            Button(L10n.ok) {}
+        } message: {
+            Text(
+                """
+                \(L10n.words): \(wordCountStats.words)
+                \(L10n.characters): \(wordCountStats.characters)
+                \(L10n.lines): \(wordCountStats.lines)
+                \(L10n.knots): \(wordCountStats.knots)
+                """)
+        }
+        // Watch Expression Dialog
+        .alert(L10n.watchExpressionTitle, isPresented: $showingWatchExpression) {
+            TextField(L10n.watchExpressionPrompt, text: $watchExpression)
+            Button(L10n.ok) {
+                // In full implementation, this would add to a watch list
+                watchExpression = ""
+            }
+            Button(L10n.cancel, role: .cancel) {
+                watchExpression = ""
+            }
         }
     }
 
     // MARK: - Export Logic
 
     private func prepareExportInk(_ item: Item) {
-        exportDocument = InkDocument(text: item.content)
-        showingExportInk = true
+        exportType = .ink
+        exportDocument = InkExportDocument(content: item.content, utType: .ink)
+        showingExport = true
     }
 
     private func prepareExportJson(_ item: Item) async {
         isExporting = true
         do {
             let json = try await InkCompiler.shared.compile(item.content)
-            exportJsonDocument = JSONDocument(jsonContent: json)
-            showingExportJson = true
+            exportType = .json
+            exportDocument = InkExportDocument(content: json, utType: .json)
+            showingExport = true
         } catch {
             print("Export Failed: \(error.localizedDescription)")
             exportErrorMessage = "\(L10n.compilerError)\n\(error.localizedDescription)"
@@ -142,9 +296,10 @@ struct ContentView: View {
         do {
             let json = try await InkCompiler.shared.compile(item.content)
             // Generate full HTML
-            let html = generateHTML(for: json)  // Reusing existing preview generator!
-            exportWebDocument = WebExportDocument(content: html, type: .html)
-            showingExportWeb = true
+            let html = generateHTML(for: json)
+            exportType = .html
+            exportDocument = InkExportDocument(content: html, utType: .html)
+            showingExport = true
         } catch {
             print("Web Export Failed: \(error.localizedDescription)")
             exportErrorMessage = "\(L10n.compilerError)\n\(error.localizedDescription)"
@@ -176,6 +331,42 @@ struct ContentView: View {
                 modelContext.delete(items[index])
             }
         }
+    }
+
+    // MARK: - Story Menu Helper Functions
+
+    private func calculateStats(for content: String) -> (
+        words: Int, characters: Int, lines: Int, knots: Int
+    ) {
+        let characters = content.count
+        let lines = content.components(separatedBy: .newlines).count
+
+        // Word count (excluding Ink syntax)
+        let cleanedContent =
+            content
+            .replacingOccurrences(of: "===", with: " ")
+            .replacingOccurrences(of: "->", with: " ")
+            .replacingOccurrences(of: "~", with: " ")
+            .replacingOccurrences(of: "*", with: " ")
+            .replacingOccurrences(of: "+", with: " ")
+        let words = cleanedContent.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+
+        // Count knots (=== knotName ===)
+        let knotPattern = try? NSRegularExpression(pattern: "===\\s*\\w+\\s*===", options: [])
+        let knotMatches =
+            knotPattern?.numberOfMatches(
+                in: content,
+                options: [],
+                range: NSRange(content.startIndex..., in: content)
+            ) ?? 0
+
+        return (words, characters, lines, knotMatches)
+    }
+
+    private func refreshPreview(for item: Item) async {
+        // This triggers a recompilation by slightly modifying and restoring content
+        // In a full implementation, this would navigate to the next compiler error
+        _ = try? await InkCompiler.shared.compile(item.content)
     }
 }
 
@@ -338,28 +529,38 @@ private func generateHTML(for inkContext: String) -> String {
             <title>Ink Preview</title>
             \(inkScriptTag)
             <style>
-                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; line-height: 1.6; color: #333; }
+                body { 
+                    font-family: "Georgia", serif; 
+                    padding: 40px 10%; 
+                    line-height: 1.8; 
+                    color: #333;
+                    max-width: 800px;
+                    margin: 0 auto;
+                    background-color: #fdfdfd;
+                }
                 @media (prefers-color-scheme: dark) {
-                    body { color: #eee; background: #1e1e1e; }
+                    body { color: #ccc; background: #1e1e1e; }
                     a { color: #64b5f6; }
                 }
                 .choice { 
                     cursor: pointer; 
                     color: #007aff; 
-                    margin-top: 10px; 
-                    padding: 6px 12px; 
-                    border: 1px solid #007aff; 
-                    border-radius: 6px; 
-                    transition: background 0.2s; 
+                    margin: 15px auto; 
+                    padding: 8px 16px; 
+                    border: 1px solid rgba(0, 122, 255, 0.3); 
+                    border-radius: 4px; 
+                    transition: all 0.2s; 
                     display: block;
                     width: fit-content;
+                    text-align: center;
+                    font-style: italic;
                 }
                 .choice:hover { 
-                    background: rgba(0, 122, 255, 0.1); 
-                    text-decoration: none;
+                    background: rgba(0, 122, 255, 0.05); 
+                    border-color: #007aff;
                 }
-                p { margin-bottom: 12px; }
-                pre { background: #f4f4f4; padding: 10px; border-radius: 4px; overflow-x: auto; color: #333; }
+                p { margin-bottom: 1.5em; text-align: justify; }
+                pre { background: #f4f4f4; padding: 15px; border-radius: 4px; overflow-x: auto; color: #333; font-family: monospace; }
                 #debug {
                     margin-top: 40px;
                     padding: 10px;
@@ -369,6 +570,13 @@ private func generateHTML(for inkContext: String) -> String {
                     border-radius: 4px;
                     font-size: 0.85em;
                     font-family: monospace;
+                }
+                em.end {
+                    display: block;
+                    text-align: center;
+                    margin-top: 40px;
+                    color: #999;
+                    font-variant: small-caps;
                 }
             </style>
         </head>
@@ -433,8 +641,7 @@ private func generateHTML(for inkContext: String) -> String {
                                     });
                                 } else {
                                     var endP = document.createElement('p');
-                                    endP.innerHTML = "<em>--- End of Story ---</em>";
-                                    endP.style.color = "#777";
+                                    endP.innerHTML = "<em class='end'>--- End of Story ---</em>";
                                     storyContainer.appendChild(endP);
                                 }
                             }
@@ -481,79 +688,27 @@ extension UTType {
     static let inkJs = UTType(exportedAs: "com.inkle.ink-js")
 }
 
-// MARK: - Ink Source Document
-struct InkDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.ink, .plainText] }
-
-    var text: String
-
-    init(text: String = "") {
-        self.text = text
-    }
-
-    init(configuration: ReadConfiguration) throws {
-        if let data = configuration.file.regularFileContents,
-            let content = String(data: data, encoding: .utf8)
-        {
-            text = content
-        } else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-    }
-
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let data = text.data(using: .utf8)!
-        return FileWrapper(regularFileWithContents: data)
-    }
-}
-
-// MARK: - JSON Export Document
-struct JSONDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json, .inkJson] }
-
-    var jsonContent: String
-
-    init(jsonContent: String) {
-        self.jsonContent = jsonContent
-    }
-
-    init(configuration: ReadConfiguration) throws {
-        if let data = configuration.file.regularFileContents,
-            let content = String(data: data, encoding: .utf8)
-        {
-            jsonContent = content
-        } else {
-            jsonContent = ""
-        }
-    }
-
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let data = jsonContent.data(using: .utf8)!
-        return FileWrapper(regularFileWithContents: data)
-    }
-}
-
-// MARK: - Web/JS Export Document
-struct WebExportDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.html, .inkJs] }
+// MARK: - Unified Export Document
+struct InkExportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.ink, .json, .html, .plainText] }
 
     var content: String
-    var type: UTType
+    var utType: UTType
 
-    init(content: String, type: UTType = .html) {
+    init(content: String, utType: UTType) {
         self.content = content
-        self.type = type
+        self.utType = utType
     }
 
     init(configuration: ReadConfiguration) throws {
         if let data = configuration.file.regularFileContents,
-            let content = String(data: data, encoding: .utf8)
+            let text = String(data: data, encoding: .utf8)
         {
-            self.content = content
+            content = text
         } else {
-            self.content = ""
+            content = ""
         }
-        self.type = .html
+        utType = .plainText
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
