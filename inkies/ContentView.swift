@@ -35,7 +35,7 @@ struct ContentView: View {
     @State private var exportErrorMessage = ""
     @State private var isExporting = false
 
-    @AppStorage("appTheme") private var appTheme: AppTheme = .system
+    @AppStorage("appTheme") private var appTheme: AppTheme = .light
     @State private var showingWordCount = false
     @State private var showingWatchExpression = false
     @State private var watchExpression = ""
@@ -296,7 +296,7 @@ struct ContentView: View {
         do {
             let json = try await InkCompiler.shared.compile(item.content)
             // Generate full HTML
-            let html = generateHTML(for: json)
+            let html = generateHTML(for: json, theme: appTheme)
             exportType = .html
             exportDocument = InkExportDocument(content: html, utType: .html)
             showingExport = true
@@ -438,7 +438,7 @@ struct EditorView: View {
             return webView
         }
 
-        @AppStorage("appTheme") private var appTheme: AppTheme = .system
+        @AppStorage("appTheme") private var appTheme: AppTheme = .light
 
         func updateNSView(_ nsView: WKWebView, context: Context) {
             print("WebView: updateNSView called. Content length: \(content.count)")
@@ -474,7 +474,7 @@ struct EditorView: View {
             return webView
         }
 
-        @AppStorage("appTheme") private var appTheme: AppTheme = .system
+        @AppStorage("appTheme") private var appTheme: AppTheme = .light
 
         func updateUIView(_ uiView: WKWebView, context: Context) {
             print("WebView: updateUIView called.")
@@ -542,12 +542,6 @@ private func generateHTML(for inkContext: String, theme: AppTheme) -> String {
                     margin: 0 auto;
                     background-color: \(theme == .dark ? "#1e1e1e" : "#fdfdfd");
                 }
-                \(theme == .system ? """
-                @media (prefers-color-scheme: dark) {
-                    body { color: #ccc; background: #1e1e1e; }
-                    a { color: #64b5f6; }
-                }
-                """ : "")
                 a { color: \(theme == .dark ? "#64b5f6" : "#007aff"); }
                 .choice { 
                     cursor: pointer; 

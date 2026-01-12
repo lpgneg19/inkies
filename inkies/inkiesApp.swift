@@ -23,14 +23,14 @@ struct inkiesApp: App {
         }
     }()
 
-    @AppStorage("appTheme") private var appTheme: AppTheme = .system
+    @AppStorage("appTheme") private var appTheme: AppTheme = .light
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .preferredColorScheme(appTheme.colorScheme)
         }
         .modelContainer(sharedModelContainer)
-        .preferredColorScheme(appTheme.colorScheme)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button(L10n.newInkFile) {
@@ -62,11 +62,9 @@ struct inkiesApp: App {
                 }
                 .keyboardShortcut("f", modifiers: .command)
 
-                Menu(L10n.theme) {
-                    Picker(L10n.theme, selection: $appTheme) {
-                        ForEach(AppTheme.allCases) { theme in
-                            Text(theme.localizedName).tag(theme)
-                        }
+                Picker(L10n.theme, selection: $appTheme) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Text(theme.localizedName).tag(theme)
                     }
                 }
             }
@@ -149,7 +147,7 @@ extension inkiesApp {
     @MainActor
     private func handleIncomingURL(_ url: URL) {
         // ... (rest of logic)
-        guard let schema = sharedModelContainer.schema as? Schema else { return }
+        let schema = sharedModelContainer.schema
         let context = sharedModelContainer.mainContext
 
         do {
