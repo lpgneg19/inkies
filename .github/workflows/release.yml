@@ -29,6 +29,32 @@ jobs:
           VERSION=$(grep "MARKETING_VERSION" inkies.xcodeproj/project.pbxproj | head -n 1 | awk -F' = ' '{print $2}' | tr -d '"; ')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Extract Changelog
+        id: extract_changelog
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          # Extract section starting with ## VERSION until the next ## header or EOF
+          sed -n "/^## $VERSION/,/^## /p" CHANGELOG.md > temp_notes.md
+          
+          # Check if we found anything
+          if [ -s temp_notes.md ]; then
+            # Remove the first (current header) and if present, the last (next header) lines
+            if [ $(grep -c "^## " temp_notes.md) -gt 1 ]; then
+              sed '1d;$d' temp_notes.md > release_notes.md
+            else
+              sed '1d' temp_notes.md > release_notes.md
+            fi
+            
+            # Final check if extraction resulted in content
+            if [ -s release_notes.md ] && [ -n "$(grep '[[:alnum:]]' release_notes.md)" ]; then
+              echo "notes_path=release_notes.md" >> $GITHUB_OUTPUT
+            else
+              echo "notes_path=" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "notes_path=" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build Universal App
         run: |
           xcodebuild build \
@@ -59,7 +85,7 @@ jobs:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.get_version.outputs.version) }}
           files: "Inkies-v${{ steps.get_version.outputs.version }}.dmg"
           name: "Release v${{ steps.get_version.outputs.version }}"
-          body_path: RELEASE_NOTE_0.4.md
+          body_path: ${{ steps.extract_changelog.outputs.notes_path }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
