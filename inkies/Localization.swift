@@ -82,4 +82,10 @@ struct L10n {
     static var characters: String { Language.current == .chinese ? "字符" : "Characters" }
     static var lines: String { Language.current == .chinese ? "行数" : "Lines" }
     static var knots: String { Language.current == .chinese ? "结" : "Knots" }
+
+    // MARK: - Themes
+    static var theme: String { Language.current == .chinese ? "主题" : "Theme" }
+    static var followSystem: String { Language.current == .chinese ? "跟随系统" : "Follow System" }
+    static var lightMode: String { Language.current == .chinese ? "明亮模式" : "Light Mode" }
+    static var darkMode: String { Language.current == .chinese ? "暗黑模式" : "Dark Mode" }
 }

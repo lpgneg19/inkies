@@ -35,7 +35,7 @@ struct ContentView: View {
     @State private var exportErrorMessage = ""
     @State private var isExporting = false
 
-    // Story Menu States
+    @AppStorage("appTheme") private var appTheme: AppTheme = .system
     @State private var showingWordCount = false
     @State private var showingWatchExpression = false
     @State private var watchExpression = ""
@@ -438,9 +438,11 @@ struct EditorView: View {
             return webView
         }
 
+        @AppStorage("appTheme") private var appTheme: AppTheme = .system
+
         func updateNSView(_ nsView: WKWebView, context: Context) {
             print("WebView: updateNSView called. Content length: \(content.count)")
-            let html = generateHTML(for: content)
+            let html = generateHTML(for: content, theme: appTheme)
 
             if context.coordinator.lastContent != content {
                 print("WebView: Loading new HTML...")
@@ -472,9 +474,11 @@ struct EditorView: View {
             return webView
         }
 
+        @AppStorage("appTheme") private var appTheme: AppTheme = .system
+
         func updateUIView(_ uiView: WKWebView, context: Context) {
             print("WebView: updateUIView called.")
-            let html = generateHTML(for: content)
+            let html = generateHTML(for: content, theme: appTheme)
             if context.coordinator.lastContent != content {
                 uiView.loadHTMLString(html, baseURL: Bundle.main.bundleURL)
                 context.coordinator.lastContent = content
@@ -512,7 +516,7 @@ private func getInkScript() -> String {
         #"<script src="https://unpkg.com/inkjs/dist/ink.js"></script><script>console.warn('INKIES DEBUG: local ink.min.js NOT found in bundle, using CDN');</script>"#
 }
 
-private func generateHTML(for inkContext: String) -> String {
+private func generateHTML(for inkContext: String, theme: AppTheme) -> String {
     let safeContent = inkContext.replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
         .replacingOccurrences(of: "\n", with: "\\n")
@@ -533,15 +537,18 @@ private func generateHTML(for inkContext: String) -> String {
                     font-family: "Georgia", serif; 
                     padding: 40px 10%; 
                     line-height: 1.8; 
-                    color: #333;
+                    color: \(theme == .dark ? "#ccc" : "#333");
                     max-width: 800px;
                     margin: 0 auto;
-                    background-color: #fdfdfd;
+                    background-color: \(theme == .dark ? "#1e1e1e" : "#fdfdfd");
                 }
+                \(theme == .system ? """
                 @media (prefers-color-scheme: dark) {
                     body { color: #ccc; background: #1e1e1e; }
                     a { color: #64b5f6; }
                 }
+                """ : "")
+                a { color: \(theme == .dark ? "#64b5f6" : "#007aff"); }
                 .choice { 
                     cursor: pointer; 
                     color: #007aff; 

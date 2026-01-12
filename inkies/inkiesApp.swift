@@ -23,11 +23,14 @@ struct inkiesApp: App {
         }
     }()
 
+    @AppStorage("appTheme") private var appTheme: AppTheme = .system
+
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
         .modelContainer(sharedModelContainer)
+        .preferredColorScheme(appTheme.colorScheme)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button(L10n.newInkFile) {
@@ -58,6 +61,14 @@ struct inkiesApp: App {
                         name: Notification.Name("SearchItems"), object: nil)
                 }
                 .keyboardShortcut("f", modifiers: .command)
+
+                Menu(L10n.theme) {
+                    Picker(L10n.theme, selection: $appTheme) {
+                        ForEach(AppTheme.allCases) { theme in
+                            Text(theme.localizedName).tag(theme)
+                        }
+                    }
+                }
             }
 
             CommandGroup(replacing: .importExport) {
