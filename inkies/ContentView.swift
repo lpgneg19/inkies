@@ -2,12 +2,17 @@ import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
+import WhatsNewKit
 
 // MARK: - Localization Helper (Moved to Localization.swift)
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Item.timestamp, order: .reverse) private var items: [Item]
+
+    // WhatsNew State
+    @State private var manualWhatsNew: WhatsNew?
+
 
     private var filteredItems: [Item] {
         if searchText.isEmpty {
@@ -45,225 +50,262 @@ struct ContentView: View {
     )
 
     var body: some View {
+        navigationSplitView
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("AddItem"))) { _ in
+                addItem()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("SaveProject"))) {
+                _ in
+                try? modelContext.save()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("SearchItems"))) {
+                _ in
+                withAnimation {
+                    isSearchMode = true
+                    isSearchFieldFocused = true
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GotoAnything"))) {
+                _ in
+                withAnimation {
+                    isSearchMode = true
+                    isSearchFieldFocused = true
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("NextIssue"))) { _ in
+                if let item = selection {
+                    Task { await refreshPreview(for: item) }
+                }
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: Notification.Name("AddWatchExpression"))
+            ) { _ in
+                showingWatchExpression = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ToggleTags"))) {
+                _ in
+                tagsVisible.toggle()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowWordCount"))) {
+                _ in
+                if let item = selection {
+                    wordCountStats = calculateStats(for: item.content)
+                    showingWordCount = true
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("InsertSnippet"))) {
+                notification in
+                if let snippet = notification.object as? String, let item = selection {
+                    item.content += snippet
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowWhatsNew"))) {
+                _ in
+                manualWhatsNew = WhatsNew(
+                    version: "0.5.0",
+                    title: "What's New in Inkies",
+                    features: [
+                        .init(
+                            image: .init(systemName: "square.and.arrow.up"),
+                            title: "Export Options",
+                            subtitle: "Export your stories to JSON or Web (HTML)."
+                        ),
+                        .init(
+                            image: .init(systemName: "pencil"),
+                            title: "Syntax Highlighting",
+                            subtitle: "Improved editor experience."
+                        ),
+                    ]
+                )
+            }
+            .sheet(item: $manualWhatsNew) { whatsNew in
+                WhatsNewView(whatsNew: whatsNew)
+            }
+            .fileExporter(
+                isPresented: $showingExport,
+                document: exportDocument,
+                contentType: exportType,
+                defaultFilename: {
+                    switch exportType {
+                    case .ink: return "Story"
+                    case .json: return "story"
+                    case .html: return "index"
+                    default: return "file"
+                    }
+                }()
+            ) { result in
+                handleExportResult(result)
+            }
+            .alert(L10n.exportFailed, isPresented: $showingExportError) {
+                Button("OK") {}
+            } message: {
+                Text(exportErrorMessage)
+            }
+            .alert(L10n.wordCountTitle, isPresented: $showingWordCount) {
+                Button(L10n.ok) {}
+            } message: {
+                Text(
+                    """
+                    \(L10n.words): \(wordCountStats.words)
+                    \(L10n.characters): \(wordCountStats.characters)
+                    \(L10n.lines): \(wordCountStats.lines)
+                    \(L10n.knots): \(wordCountStats.knots)
+                    """)
+            }
+            .alert(L10n.watchExpressionTitle, isPresented: $showingWatchExpression) {
+                TextField(L10n.watchExpressionPrompt, text: $watchExpression)
+                Button(L10n.ok) {
+                    // In full implementation, this would add to a watch list
+                    watchExpression = ""
+                }
+                Button(L10n.cancel, role: .cancel) {
+                    watchExpression = ""
+                }
+            }
+    }
+
+    private var navigationSplitView: some View {
         NavigationSplitView {
-            List(selection: $selection) {
-                ForEach(filteredItems) { item in
-                    NavigationLink(value: item) {
-                        Text(item.title.isEmpty ? L10n.untitled : item.title)
-                    }
-                    .contextMenu {
-                        Button(L10n.rename) {
-                            itemToRename = item
-                            renameTitle = item.title
-                            showingRenameAlert = true
-                        }
-                        Button(L10n.delete, role: .destructive) {
-                            modelContext.delete(item)
-                        }
-                        Divider()
-                        Menu(L10n.exportMenu) {
-                            Button(L10n.exportInk) { prepareExportInk(item) }
-                            Button(L10n.exportJson) { Task { await prepareExportJson(item) } }
-                            Button(L10n.exportWeb) { Task { await prepareExportWeb(item) } }
+            sidebarView
+                .navigationSplitViewColumnWidth(min: 180, ideal: 200)
+                .toolbar {
+                    ToolbarItem(placement: .navigation) {
+                        Button(action: addItem) {
+                            Label(L10n.addItem, systemImage: "plus")
                         }
                     }
                 }
-                .onDelete(perform: deleteItems)
-            }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-            .toolbar {
-                ToolbarItem(placement: .navigation) {
-                    Button(action: addItem) {
-                        Label(L10n.addItem, systemImage: "plus")
+                .alert(L10n.renameTitle, isPresented: $showingRenameAlert) {
+                    TextField(L10n.newTitle, text: $renameTitle)
+                    Button(L10n.rename) {
+                        if let item = itemToRename {
+                            item.title = renameTitle
+                        }
                     }
+                    Button(L10n.cancel, role: .cancel) {}
                 }
-            }
-            .alert(L10n.renameTitle, isPresented: $showingRenameAlert) {
-                TextField(L10n.newTitle, text: $renameTitle)
-                Button(L10n.rename) {
-                    if let item = itemToRename {
-                        item.title = renameTitle
-                    }
-                }
-                Button(L10n.cancel, role: .cancel) {}
-            }
         } detail: {
-            if let item = selection {
-                EditorView(item: item)
-                    .onReceive(
-                        NotificationCenter.default.publisher(for: Notification.Name("ExportInk"))
-                    ) { _ in
-                        prepareExportInk(item)
-                    }
-                    .onReceive(
-                        NotificationCenter.default.publisher(for: Notification.Name("ExportJSON"))
-                    ) { _ in
-                        Task { await prepareExportJson(item) }
-                    }
-                    .onReceive(
-                        NotificationCenter.default.publisher(for: Notification.Name("ExportWeb"))
-                    ) { _ in
-                        Task { await prepareExportWeb(item) }
-                    }
-            } else {
-                Text(L10n.selectDoc)
-                    .foregroundColor(.secondary)
-            }
+            detailView
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 8) {
-                    if isSearchMode {
-                        HStack {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundColor(.secondary)
-                            TextField(L10n.search, text: $searchText)
-                                .textFieldStyle(.plain)
-                                .focused($isSearchFieldFocused)
-                                .frame(width: 200)
+            mainToolbar
+        }
+    }
 
-                            if !searchText.isEmpty {
-                                Button(action: { searchText = "" }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color(.unemphasizedSelectedTextBackgroundColor).opacity(0.1))
-                        .cornerRadius(8)
 
-                        Button(L10n.cancel) {
-                            withAnimation {
-                                isSearchMode = false
-                                searchText = ""
-                            }
-                        }
-                    } else {
-                        if selection != nil {
-                            Menu {
-                                Button(L10n.exportInk) { prepareExportInk(selection!) }
-                                Button(L10n.exportJson) {
-                                    Task { await prepareExportJson(selection!) }
-                                }
-                                Button(L10n.exportWeb) {
-                                    Task { await prepareExportWeb(selection!) }
-                                }
-                            } label: {
-                                Label(L10n.exportMenu, systemImage: "square.and.arrow.up")
-                            }
-                        }
+    // MARK: - Subviews
 
-                        Button(action: {
-                            withAnimation {
-                                isSearchMode = true
-                                isSearchFieldFocused = true
-                            }
-                        }) {
-                            Label(L10n.search, systemImage: "magnifyingglass")
-                        }
+    @ViewBuilder
+    private var sidebarView: some View {
+        List(selection: $selection) {
+            ForEach(filteredItems) { item in
+                NavigationLink(value: item) {
+                    Text(item.title.isEmpty ? L10n.untitled : item.title)
+                }
+                .contextMenu {
+                    Button(L10n.rename) {
+                        itemToRename = item
+                        renameTitle = item.title
+                        showingRenameAlert = true
+                    }
+                    Button(L10n.delete, role: .destructive) {
+                        modelContext.delete(item)
+                    }
+                    Divider()
+                    Menu(L10n.exportMenu) {
+                        Button(L10n.exportInk) { prepareExportInk(item) }
+                        Button(L10n.exportJson) { Task { await prepareExportJson(item) } }
+                        Button(L10n.exportWeb) { Task { await prepareExportWeb(item) } }
                     }
                 }
             }
+            .onDelete(perform: deleteItems)
         }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("AddItem"))) { _ in
-            addItem()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("SaveProject"))) {
-            _ in
-            // SwiftData auto-saves, but we can trigger a manual save if needed
-            try? modelContext.save()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("SearchItems"))) {
-            _ in
-            withAnimation {
-                isSearchMode = true
-                isSearchFieldFocused = true
-            }
-        }
-        // Story Menu Handlers
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GotoAnything"))) {
-            _ in
-            // Go to anything - opens search mode (similar to Inky's Cmd+P)
-            withAnimation {
-                isSearchMode = true
-                isSearchFieldFocused = true
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("NextIssue"))) { _ in
-            // Jump to next issue - In a full implementation, this would navigate to compiler errors
-            // For now, we'll just trigger a refresh
-            if let item = selection {
-                Task { await refreshPreview(for: item) }
-            }
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: Notification.Name("AddWatchExpression"))
-        ) { _ in
-            showingWatchExpression = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ToggleTags"))) {
-            _ in
-            tagsVisible.toggle()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ShowWordCount"))) {
-            _ in
-            if let item = selection {
-                wordCountStats = calculateStats(for: item.content)
-                showingWordCount = true
-            }
-        }
-        // Ink Menu Handler - Insert Snippet
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("InsertSnippet"))) {
-            notification in
-            if let snippet = notification.object as? String, let item = selection {
-                item.content += snippet
-            }
-        }
-        // Unified File Exporter
-        .fileExporter(
-            isPresented: $showingExport,
-            document: exportDocument,
-            contentType: exportType,
-            defaultFilename: {
-                switch exportType {
-                case .ink: return "Story"
-                case .json: return "story"
-                case .html: return "index"
-                default: return "file"
+    }
+
+    // MARK: - Subviews
+
+    @ViewBuilder
+    private var detailView: some View {
+        if let item = selection {
+            EditorView(item: item)
+                .onReceive(
+                    NotificationCenter.default.publisher(for: Notification.Name("ExportInk"))
+                ) { _ in
+                    prepareExportInk(item)
                 }
-            }()
-        ) { result in
-            handleExportResult(result)
+                .onReceive(
+                    NotificationCenter.default.publisher(for: Notification.Name("ExportJSON"))
+                ) { _ in
+                    Task { await prepareExportJson(item) }
+                }
+                .onReceive(
+                    NotificationCenter.default.publisher(for: Notification.Name("ExportWeb"))
+                ) { _ in
+                    Task { await prepareExportWeb(item) }
+                }
+        } else {
+            Text(L10n.selectDoc)
+                .foregroundColor(.secondary)
         }
-        .alert(L10n.exportFailed, isPresented: $showingExportError) {
-            Button("OK") {}
-        } message: {
-            Text(exportErrorMessage)
-        }
-        // Word Count Dialog
-        .alert(L10n.wordCountTitle, isPresented: $showingWordCount) {
-            Button(L10n.ok) {}
-        } message: {
-            Text(
-                """
-                \(L10n.words): \(wordCountStats.words)
-                \(L10n.characters): \(wordCountStats.characters)
-                \(L10n.lines): \(wordCountStats.lines)
-                \(L10n.knots): \(wordCountStats.knots)
-                """)
-        }
-        // Watch Expression Dialog
-        .alert(L10n.watchExpressionTitle, isPresented: $showingWatchExpression) {
-            TextField(L10n.watchExpressionPrompt, text: $watchExpression)
-            Button(L10n.ok) {
-                // In full implementation, this would add to a watch list
-                watchExpression = ""
-            }
-            Button(L10n.cancel, role: .cancel) {
-                watchExpression = ""
+    }
+
+    @ToolbarContentBuilder
+    private var mainToolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            HStack(spacing: 8) {
+                if isSearchMode {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.secondary)
+                        TextField(L10n.search, text: $searchText)
+                            .textFieldStyle(.plain)
+                            .focused($isSearchFieldFocused)
+                            .frame(width: 200)
+
+                        if !searchText.isEmpty {
+                            Button(action: { searchText = "" }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(.unemphasizedSelectedTextBackgroundColor).opacity(0.1))
+                    .cornerRadius(8)
+
+                    Button(L10n.cancel) {
+                        withAnimation {
+                            isSearchMode = false
+                            searchText = ""
+                        }
+                    }
+                } else {
+                    if selection != nil {
+                        Menu {
+                            Button(L10n.exportInk) { prepareExportInk(selection!) }
+                            Button(L10n.exportJson) {
+                                Task { await prepareExportJson(selection!) }
+                            }
+                            Button(L10n.exportWeb) {
+                                Task { await prepareExportWeb(selection!) }
+                            }
+                        } label: {
+                            Label(L10n.exportMenu, systemImage: "square.and.arrow.up")
+                        }
+                    }
+
+                    Button(action: {
+                        withAnimation {
+                            isSearchMode = true
+                            isSearchFieldFocused = true
+                        }
+                    }) {
+                        Label(L10n.search, systemImage: "magnifyingglass")
+                    }
+                }
             }
         }
     }
@@ -684,9 +726,9 @@ private func generateHTML(for inkContext: String, theme: AppTheme) -> String {
 
 // MARK: - UTType Extensions
 extension UTType {
-    static let ink = UTType(exportedAs: "com.inkle.ink")
-    static let inkJson = UTType(exportedAs: "com.inkle.ink-json")
-    static let inkJs = UTType(exportedAs: "com.inkle.ink-js")
+    nonisolated static let ink = UTType(exportedAs: "com.inkle.ink")
+    nonisolated static let inkJson = UTType(exportedAs: "com.inkle.ink-json")
+    nonisolated static let inkJs = UTType(exportedAs: "com.inkle.ink-js")
 }
 
 // MARK: - Unified Export Document
@@ -719,7 +761,7 @@ struct InkExportDocument: FileDocument {
 }
 
 // MARK: - Ink Compiler Class
-class InkCompiler {
+actor InkCompiler {
     static let shared = InkCompiler()
 
     // Potential paths for inklecate

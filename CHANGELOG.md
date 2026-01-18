@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.5.0 (2026-01-18)
+
+### 🚀 Performance & Infrastructure
+- **Swift 6.2 Update**: Upgraded the project to Swift 6.2 to leverage the latest language features and performance improvements.
+- **Concurrency Safety**: Refactored `InkCompiler` into an `actor` to ensure strict concurrency safety in line with Swift 6 standards.
+- **Dependency Optimization**: Evaluated JSON parsing libraries and optimized for performance by maintaining lightweight native string handling.
+
+### 🆕 New Features
+- **What's New Gallery**: Integrated `WhatsNewKit` to provide a visually rich overview of new features when users open the app after an update.
+
 ## 0.4.0
 
 ### 🎨 Simplified Theme System

@@ -7,6 +7,7 @@
 
 import SwiftData
 import SwiftUI
+import WhatsNewKit
 
 @main
 struct inkiesApp: App {
@@ -29,6 +30,27 @@ struct inkiesApp: App {
         WindowGroup {
             ContentView()
                 .preferredColorScheme(appTheme.colorScheme)
+                .environment(\.whatsNew, WhatsNewEnvironment(
+                    whatsNewCollection: [
+                        WhatsNew(
+                            version: "0.5.0",
+                            title: "What's New in Inkies",
+                            features: [
+                                .init(
+                                    image: .init(systemName: "square.and.arrow.up"),
+                                    title: "Export Options",
+                                    subtitle: "Export your stories to JSON or Web (HTML)."
+                                ),
+                                .init(
+                                    image: .init(systemName: "pencil"),
+                                    title: "Syntax Highlighting",
+                                    subtitle: "Improved editor experience."
+                                )
+                            ]
+                        )
+                    ]
+                ))
+                .whatsNewSheet()
         }
         .modelContainer(sharedModelContainer)
         .commands {
@@ -139,6 +161,13 @@ struct inkiesApp: App {
                     }
                 }
             }
+
+            CommandGroup(replacing: .help) {
+                Button("What's New in Inkies") {
+                    NotificationCenter.default.post(
+                        name: Notification.Name("ShowWhatsNew"), object: nil)
+                }
+            }
         }
     }
 }
@@ -147,7 +176,6 @@ extension inkiesApp {
     @MainActor
     private func handleIncomingURL(_ url: URL) {
         // ... (rest of logic)
-        let schema = sharedModelContainer.schema
         let context = sharedModelContainer.mainContext
 
         do {
