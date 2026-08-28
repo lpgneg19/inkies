@@ -111,24 +111,17 @@ jobs:
           codesign --force --sign - --options=runtime --entitlements inkies/inkies.entitlements Build/Universal/inkies.app/Contents/MacOS/inklecate
           codesign --force --sign - --options=runtime --entitlements inkies/inkies.entitlements Build/Universal/inkies.app
 
-      - name: Split Architectures (x86_64 & arm64)
+      - name: Split Architectures (arm64)
         run: |
-          mkdir -p Build/x86_64/inkies.app
           mkdir -p Build/arm64/inkies.app
           
-          # Copy Universal app to specific folders
-          cp -R Build/Universal/inkies.app/ Build/x86_64/inkies.app/
+          # Copy Universal app to arm64 folder
           cp -R Build/Universal/inkies.app/ Build/arm64/inkies.app/
           
           # Thin main executable
-          lipo -thin x86_64 Build/Universal/inkies.app/Contents/MacOS/inkies -output Build/x86_64/inkies.app/Contents/MacOS/inkies
           lipo -thin arm64 Build/Universal/inkies.app/Contents/MacOS/inkies -output Build/arm64/inkies.app/Contents/MacOS/inkies
           
-          # Re-sign thinned nested components and app bundles
-          codesign --force --sign - --options=runtime Build/x86_64/inkies.app/Contents/Frameworks/Sparkle.framework
-          codesign --force --sign - --options=runtime --entitlements inkies/inkies.entitlements Build/x86_64/inkies.app/Contents/MacOS/inklecate
-          codesign --force --sign - --options=runtime --entitlements inkies/inkies.entitlements Build/x86_64/inkies.app
-          
+          # Re-sign thinned nested components and app bundle
           codesign --force --sign - --options=runtime Build/arm64/inkies.app/Contents/Frameworks/Sparkle.framework
           codesign --force --sign - --options=runtime --entitlements inkies/inkies.entitlements Build/arm64/inkies.app/Contents/MacOS/inklecate
           codesign --force --sign - --options=runtime --entitlements inkies/inkies.entitlements Build/arm64/inkies.app
@@ -138,12 +131,12 @@ jobs:
         run: |
           VERSION=${{ env.VERSION }}
           
-          # Universal ZIP (for Sparkle)
+          # 1. Universal ZIP
           cd Build/Universal
-          zip -r "../../inkies-${VERSION}-Universal.zip" "inkies.app"
+          zip -qy -r "../../inkies-${VERSION}-universal.zip" "inkies.app"
           cd -
 
-          # Universal DMG
+          # 2. Universal DMG
           create-dmg \
             --volname "inkies Installer" \
             --window-pos 200 120 \
@@ -152,22 +145,15 @@ jobs:
             --icon "inkies.app" 200 190 \
             --hide-extension "inkies.app" \
             --app-drop-link 600 185 \
-            "inkies-${VERSION}-Universal.dmg" \
+            "inkies-${VERSION}-universal.dmg" \
             "Build/Universal/inkies.app"
 
-          # x86_64 DMG
-          create-dmg \
-            --volname "inkies Installer (Intel)" \
-            --window-pos 200 120 \
-            --window-size 800 400 \
-            --icon-size 100 \
-            --icon "inkies.app" 200 190 \
-            --hide-extension "inkies.app" \
-            --app-drop-link 600 185 \
-            "inkies-${VERSION}-x86_64.dmg" \
-            "Build/x86_64/inkies.app"
+          # 3. arm64 ZIP
+          cd Build/arm64
+          zip -qy -r "../../inkies-${VERSION}-arm64.zip" "inkies.app"
+          cd -
 
-          # arm64 DMG
+          # 4. arm64 DMG
           create-dmg \
             --volname "inkies Installer (Apple Silicon)" \
             --window-pos 200 120 \
@@ -179,7 +165,7 @@ jobs:
             "inkies-${VERSION}-arm64.dmg" \
             "Build/arm64/inkies.app"
           
-          echo "ZIP_NAME=inkies-${VERSION}-Universal.zip" >> $GITHUB_ENV
+          echo "ZIP_NAME=inkies-${VERSION}-universal.zip" >> $GITHUB_ENV
 
       - name: Extract Release Notes (en & zh)
         run: |
@@ -214,7 +200,8 @@ jobs:
           fi
 
           mkdir -p deploy
-          cp "${{ env.ZIP_NAME }}" deploy/
+          cp "$GITHUB_WORKSPACE/inkies-${VERSION}-universal.zip" deploy/
+          cp "$GITHUB_WORKSPACE/inkies-${VERSION}-arm64.zip" deploy/
           cp release_notes_en.md "deploy/release_notes_en.md"
           cp release_notes_zh.md "deploy/release_notes_zh.md"
           cp release_notes_en.md "deploy/release_notes.md"
@@ -253,10 +240,10 @@ jobs:
           prerelease: false
           body_path: release_notes.md
           files: |
-            inkies-*-Universal.dmg
-            inkies-*-x86_64.dmg
+            inkies-*-universal.zip
+            inkies-*-universal.dmg
+            inkies-*-arm64.zip
             inkies-*-arm64.dmg
-            ${{ env.ZIP_NAME }}
             release_notes_en.md
             release_notes_zh.md
             appcast.xml
@@ -268,7 +255,7 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${{ env.VERSION }}"
-          DMG_NAME="inkies-${VERSION}-Universal.dmg"
+          DMG_NAME="inkies-${VERSION}-universal.dmg"
           SHA256=$(shasum -a 256 "$DMG_NAME" | awk '{print $1}')
           
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/SteveShi/homebrew-tap.git tap-repo
